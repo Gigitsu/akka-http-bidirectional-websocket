@@ -11,12 +11,12 @@ import org.scalatest.{FlatSpec, Matchers}
 /**
   * created by gigitsu on 08/02/2019.
   */
-class G2WsServerSpec extends FlatSpec with Matchers with Directives with ScalatestRouteTest with MockFactory {
+class WsServerSpec extends FlatSpec with Matchers with Directives with ScalatestRouteTest with MockFactory {
   implicit val as: ActorSystem = ActorSystem("G2Spec")
   implicit val am: ActorMaterializer = ActorMaterializer()
 
   val f = mockFunction[Any, Unit]
-  val ws = new G2WsServer(f)
+  val ws = new WsServer(f)
 
   behavior of "G2 WebSocket"
 

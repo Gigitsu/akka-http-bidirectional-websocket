@@ -6,16 +6,20 @@ import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{Message, TextMessage}
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
+
+import akka.pattern.ask
+
 import akka.stream.scaladsl.{Flow, Sink, Source}
 import akka.stream.{ActorMaterializer, OverflowStrategy}
 
 import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.duration._
 import scala.util.{Failure, Success}
 
 /**
   * created by gigitsu on 08/02/2019.
   */
-class G2WsServer(f: Any => Unit) {
+class WsServer(f: Any => Unit) {
   private implicit val as: ActorSystem = ActorSystem("G2WS")
   private implicit val am: ActorMaterializer = ActorMaterializer()
 
@@ -23,6 +27,7 @@ class G2WsServer(f: Any => Unit) {
 
   private var connections: List[ActorRef] = List()
 
+  // outbound with side effect, no more used
   private def listen(): Flow[Message, Message, NotUsed] = {
     val outbound: Source[Message, ActorRef] = Source.actorRef[Message](1000, OverflowStrategy.fail)
     val inbound: Sink[Message, Any] = Sink.foreach(f)
@@ -36,11 +41,23 @@ class G2WsServer(f: Any => Unit) {
   val routes: Route = pathEndOrSingleSlash {
     complete("G2 web socket server up and running")
   } ~ path("ws") {
-    handleWebSocketMessages(listen())
+    println("new incoming connection")
+    connections ::= as.actorOf(WsHandlerActor.props)
+
+    val ff = (connections.head ? WsHandlerActor.InitWebSocket) (3.seconds).mapTo[Flow[Message, Message, _]]
+
+    onComplete(ff) {
+      case Success(flow) =>
+        println("start web socket")
+        handleWebSocketMessages(flow)
+      case Failure(err) =>
+        println(err.toString)
+        complete(err.toString)
+    }
   }
 
   def sendMessage(s: String): Unit = {
-    for (con <- connections) con ! TextMessage.Strict(s)
+    for (con <- connections) con ! s
   }
 
   def terminate(): Future[Terminated] = as.terminate()
