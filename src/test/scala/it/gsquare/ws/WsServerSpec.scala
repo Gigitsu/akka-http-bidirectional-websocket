@@ -21,7 +21,7 @@ class WsServerSpec extends FlatSpec with Matchers with Directives with Scalatest
     // create a testing probe representing the client-side
     val wsClient = WSProbe()
 
-    WS("/ws", wsClient.flow) ~> ws.routes ~> check {
+    WS("/ws?access_token=test", wsClient.flow) ~> ws.routes ~> check {
       // check response from ws upgrade headers
       isWebSocketUpgrade shouldBe true
 
