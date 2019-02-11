@@ -2,6 +2,8 @@ package it.gsquare.ws
 
 import akka.NotUsed
 import akka.actor.{ActorRef, ActorSystem, PoisonPill, Terminated}
+import akka.cluster.pubsub.DistributedPubSub
+import akka.cluster.pubsub.DistributedPubSubMediator.Publish
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{BinaryMessage, Message, TextMessage}
 import akka.http.scaladsl.server.Directives._
@@ -23,7 +25,7 @@ class WsServer {
 
   private implicit val ec: ExecutionContext = as.dispatcher
 
-  private var connections: List[ActorRef] = List()
+  private val mediator: ActorRef = DistributedPubSub(as).mediator
 
   val routes: Route = pathEndOrSingleSlash {
     complete("G2 web socket server up and running")
@@ -35,7 +37,7 @@ class WsServer {
       toMat(Sink.asPublisher(fanout = false))(Keep.both).
       run()
 
-    connections ::= as.actorOf(WsHandlerActor.props(down))
+    val handler = as.actorOf(WsHandlerActor.props(down))
 
     val outbound: Source[TextMessage.Strict, NotUsed] = Source.fromPublisher(publisher).map(TextMessage.Strict)
     val inbound: Sink[Message, Any] = Flow[Message].mapAsync(1) {
@@ -43,14 +45,14 @@ class WsServer {
       case x: BinaryMessage =>
         x.dataStream.runWith(Sink.ignore)
         Future.failed(new Exception("Unexpected data"))
-    } to Sink.actorRef[String](connections.head, PoisonPill)
+    } to Sink.actorRef[String](handler, PoisonPill)
 
     println("start web socket")
     handleWebSocketMessages(Flow.fromSinkAndSource(inbound, outbound))
   }
 
   def sendMessage(s: Any): Unit = {
-    for (con <- connections) con ! s
+    mediator ! Publish("notifications", s)
   }
 
   def terminate(): Future[Terminated] = as.terminate()
