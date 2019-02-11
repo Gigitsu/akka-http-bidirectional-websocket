@@ -7,7 +7,7 @@ import akka.cluster.pubsub.DistributedPubSubMediator.{Subscribe, SubscribeAck, U
 /**
   * created by gigitsu on 10/02/2019.
   */
-class WsHandlerActor private(down: ActorRef) extends Actor with ActorLogging {
+class WsHandlerActor private(token: String, down: ActorRef) extends Actor with ActorLogging {
   private val mediator: ActorRef = DistributedPubSub(context.system).mediator
 
   override def preStart(): Unit = mediator ! Subscribe("notifications", self)
@@ -19,7 +19,7 @@ class WsHandlerActor private(down: ActorRef) extends Actor with ActorLogging {
 
   override def receive: Receive = {
     case SubscribeAck(Subscribe(topic, None, _)) =>
-      log.info("Subscribed to {}", topic)
+      log.info("Subscribed {} to {}", token, topic)
     case x: Int =>
       log.info(s"message received: [$x]")
       down ! x.toString
@@ -30,5 +30,5 @@ class WsHandlerActor private(down: ActorRef) extends Actor with ActorLogging {
 }
 
 object WsHandlerActor {
-  def props(down: ActorRef) = Props(new WsHandlerActor(down))
+  def props(token: String, down: ActorRef) = Props(new WsHandlerActor(token, down))
 }

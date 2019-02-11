@@ -7,8 +7,7 @@ import akka.cluster.pubsub.DistributedPubSubMediator.Publish
 import akka.http.scaladsl.Http
 import akka.http.scaladsl.model.ws.{BinaryMessage, Message, TextMessage}
 import akka.http.scaladsl.server.Directives._
-import akka.http.scaladsl.server.Route
-import akka.pattern.ask
+import akka.http.scaladsl.server.{MissingQueryParamRejection, Route}
 import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.stream.{ActorMaterializer, OverflowStrategy}
 
@@ -30,25 +29,29 @@ class WsServer {
   val routes: Route = pathEndOrSingleSlash {
     complete("G2 web socket server up and running")
   } ~ path("ws") {
-    println("new incoming connection")
+    parameter('access_token.?) {
+      case None => reject(MissingQueryParamRejection("access_token"))
+      case Some(token) => //do some token validation
+        println("new incoming connection")
 
-    val (down, publisher) = Source.
-      actorRef[String](1000, OverflowStrategy.fail).
-      toMat(Sink.asPublisher(fanout = false))(Keep.both).
-      run()
+        val (down, publisher) = Source.
+          actorRef[String](1000, OverflowStrategy.fail).
+          toMat(Sink.asPublisher(fanout = false))(Keep.both).
+          run()
 
-    val handler = as.actorOf(WsHandlerActor.props(down))
+        val handler = as.actorOf(WsHandlerActor.props(token, down))
 
-    val outbound: Source[TextMessage.Strict, NotUsed] = Source.fromPublisher(publisher).map(TextMessage.Strict)
-    val inbound: Sink[Message, Any] = Flow[Message].mapAsync(1) {
-      case x: TextMessage => x.toStrict(3.seconds).map(_.text)
-      case x: BinaryMessage =>
-        x.dataStream.runWith(Sink.ignore)
-        Future.failed(new Exception("Unexpected data"))
-    } to Sink.actorRef[String](handler, PoisonPill)
+        val outbound: Source[TextMessage.Strict, NotUsed] = Source.fromPublisher(publisher).map(TextMessage.Strict)
+        val inbound: Sink[Message, Any] = Flow[Message].mapAsync(1) {
+          case x: TextMessage => x.toStrict(3.seconds).map(_.text)
+          case x: BinaryMessage =>
+            x.dataStream.runWith(Sink.ignore)
+            Future.failed(new Exception("Unexpected data"))
+        } to Sink.actorRef[String](handler, PoisonPill)
 
-    println("start web socket")
-    handleWebSocketMessages(Flow.fromSinkAndSource(inbound, outbound))
+        println("start web socket")
+        handleWebSocketMessages(Flow.fromSinkAndSource(inbound, outbound))
+    }
   }
 
   def sendMessage(s: Any): Unit = {
