@@ -1,15 +1,13 @@
 package it.gsquare.ws
 
 import akka.NotUsed
-import akka.actor.{ActorRef, ActorSystem, Terminated}
+import akka.actor.{ActorRef, ActorSystem, PoisonPill, Terminated}
 import akka.http.scaladsl.Http
-import akka.http.scaladsl.model.ws.{Message, TextMessage}
+import akka.http.scaladsl.model.ws.{BinaryMessage, Message, TextMessage}
 import akka.http.scaladsl.server.Directives._
 import akka.http.scaladsl.server.Route
-
 import akka.pattern.ask
-
-import akka.stream.scaladsl.{Flow, Sink, Source}
+import akka.stream.scaladsl.{Flow, Keep, Sink, Source}
 import akka.stream.{ActorMaterializer, OverflowStrategy}
 
 import scala.concurrent.{ExecutionContext, Future}
@@ -19,7 +17,7 @@ import scala.util.{Failure, Success}
 /**
   * created by gigitsu on 08/02/2019.
   */
-class WsServer(f: Any => Unit) {
+class WsServer {
   private implicit val as: ActorSystem = ActorSystem("G2WS")
   private implicit val am: ActorMaterializer = ActorMaterializer()
 
@@ -27,36 +25,31 @@ class WsServer(f: Any => Unit) {
 
   private var connections: List[ActorRef] = List()
 
-  // outbound with side effect, no more used
-  private def listen(): Flow[Message, Message, NotUsed] = {
-    val outbound: Source[Message, ActorRef] = Source.actorRef[Message](1000, OverflowStrategy.fail)
-    val inbound: Sink[Message, Any] = Sink.foreach(f)
-
-    Flow.fromSinkAndSourceMat(inbound, outbound)((_, outboundMat) => {
-      connections ::= outboundMat
-      NotUsed
-    })
-  }
-
   val routes: Route = pathEndOrSingleSlash {
     complete("G2 web socket server up and running")
   } ~ path("ws") {
     println("new incoming connection")
-    connections ::= as.actorOf(WsHandlerActor.props)
 
-    val ff = (connections.head ? WsHandlerActor.InitWebSocket) (3.seconds).mapTo[Flow[Message, Message, _]]
+    val (down, publisher) = Source.
+      actorRef[String](1000, OverflowStrategy.fail).
+      toMat(Sink.asPublisher(fanout = false))(Keep.both).
+      run()
 
-    onComplete(ff) {
-      case Success(flow) =>
-        println("start web socket")
-        handleWebSocketMessages(flow)
-      case Failure(err) =>
-        println(err.toString)
-        complete(err.toString)
-    }
+    connections ::= as.actorOf(WsHandlerActor.props(down))
+
+    val outbound: Source[TextMessage.Strict, NotUsed] = Source.fromPublisher(publisher).map(TextMessage.Strict)
+    val inbound: Sink[Message, Any] = Flow[Message].mapAsync(1) {
+      case x: TextMessage => x.toStrict(3.seconds).map(_.text)
+      case x: BinaryMessage =>
+        x.dataStream.runWith(Sink.ignore)
+        Future.failed(new Exception("Unexpected data"))
+    } to Sink.actorRef[String](connections.head, PoisonPill)
+
+    println("start web socket")
+    handleWebSocketMessages(Flow.fromSinkAndSource(inbound, outbound))
   }
 
-  def sendMessage(s: String): Unit = {
+  def sendMessage(s: Any): Unit = {
     for (con <- connections) con ! s
   }
 
